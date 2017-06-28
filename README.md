@@ -40,125 +40,128 @@ Synthesis uses smart 'auto friending' across module configurations. For example 
 
 ## Show me the code! (How to do things in Synthesis)
 
-	// convert a Sitecore.Data.Item to its Synthesis equivalent
-	var foo = Sitecore.Context.Item.As<ISampleItemItem>();
+```cs
 
-	// get experience editor values
-	var pageEditor = foo.Title.RenderedValue;
+// convert a Sitecore.Data.Item to its Synthesis equivalent
+var foo = Sitecore.Context.Item.As<ISampleItemItem>();
 
-	// full metadata and traversal support
-	var parent = foo.Axes.Parent; // and this parent (and other axes results) is also a Synthesis object
-	var modified = foo.Statistics.Updated;
+// get experience editor values
+var pageEditor = foo.Title.RenderedValue;
 
-	// add a new subitem with generics
-	var editing = foo.Add<ISampleItem>("Hello world");
+// full metadata and traversal support
+var parent = foo.Axes.Parent; // and this parent (and other axes results) is also a Synthesis object
+var modified = foo.Statistics.Updated;
 
-	// set text field values (automatically enters editing if not already there)
-	foo.Field.RawValue = "New value";
+// add a new subitem with generics
+var editing = foo.Add<ISampleItem>("Hello world");
 
-	// set field values in a batch
-	foo.Editing.BeginEdit();
-	foo.Field.RawValue = "new value";
-	foo.DateField.Value = DateTime.Today;
-	foo.Editing.EndEdit();
+// set text field values (automatically enters editing if not already there)
+foo.Field.RawValue = "New value";
 
-	// cast items to their base interfaces at will
-	var standardTemplate = (IStandardTemplateItem) foo;
+// set field values in a batch
+foo.Editing.BeginEdit();
+foo.Field.RawValue = "new value";
+foo.DateField.Value = DateTime.Today;
+foo.Editing.EndEdit();
+
+// cast items to their base interfaces at will
+var standardTemplate = (IStandardTemplateItem) foo;
+
+// you can also convert items without specifying an output type (the instance will be the most specific template type available)
+var generic = Sitecore.Context.Item.AsStronglyTyped();
+
+var type = generic.GetType().FullName; // this will be a "SampleItem" concrete instance, which : ISampleItem, which : IStandardTemplateItem
+
+// there are also helpers to convert collections
+var collection = Sitecore.Context.Item.Children.AsStronglyTypedCollection();
+
+// go nuts with LINQ and Sitecore 7 and query on _interfaces_
+using (var context = ContentSearchManager.CreateSearchContext(new SitecoreIndexableItem(Sitecore.Context.Item)))
+{
+	// note: GetSynthesisQueryable by default automatically filters your query by:
+	// * context language
+	// * correct template ID for the synthesis type requested
+	// * latest version of the item only
+	// ... so you don't have to remember to do it :)
+	var results = context.GetSynthesisQueryable<ISampleItemItem>()
+						.FacetOn(x => x.Title.RawValue)
+						.Take(10)
+						.GetResults();
 	
-	// you can also convert items without specifying an output type (the instance will be the most specific template type available)
-	var generic = Sitecore.Context.Item.AsStronglyTyped();
+	ISampleItemItem exampleResult = results.Hits.First().Document;
 	
-	var type = generic.GetType().FullName; // this will be a "SampleItem" concrete instance, which : ISampleItem, which : IStandardTemplateItem
+	// if you have the title field indexed with value, this will grab the value out of Lucene without any database work
+	var luceneString = exampleResult.Title.RawValue;
 	
-	// there are also helpers to convert collections
-	var collection = Sitecore.Context.Item.Children.AsStronglyTypedCollection();
+	// but this value isn't stored in the index. Accessing it will transparently cause the Sitecore.Data.Item to be loaded, and the value retrieved. Nice huh?
+	var promoted = exampleResult.Text.ExpandedLinksValue;
+}
+
+// get crazy with LINQ queries against Synthesis items
+using (var context = ContentSearchManager.CreateSearchContext(new SitecoreIndexableItem(Sitecore.Context.Item)))
+{
+	var results = context.GetSynthesisQueryable<ISampleItemItem>()
+						.Where(x => x.Integer.Value == 16 &&
+									x.Double.Value == 16.67m &&
+									x.SingleLineText.RawValue.Contains("line") &&
+									x.RichText.RawValue.StartsWith("richtext") &&
+									x.Boolean.Value == true &&
+									x.DateTime.Value < new DateTime(2013, 5, 1) &&
+									x.Droptree.TargetId == new ID("{9D6120C6-79C1-47D4-9DD8-94E91121A2EC}") &&
+									x.Multilist.TargetIds.Contains(new ID("{016A31AD-0195-4AC6-8218-5977A1C54EBB}")))
+						// you'll want this clause if you disable auto filtering to avoid getting nulls in your results if the template is incorrect
+						.Where(x => x.TemplateIds.Contains(Trample.ItemTemplateId))
+						// you can query on arbitrary index fields, or get their values, using the indexer on Synthesis items
+						.Where(x => x["_latestversion"] == "1")
+						.FacetOn(x => x.Name).FacetOn(x => x.Multilist.TargetIds)
+						.ToList();
 	
-	// go nuts with LINQ and Sitecore 7 and query on _interfaces_
-	using (var context = ContentSearchManager.CreateSearchContext(new SitecoreIndexableItem(Sitecore.Context.Item)))
+	ISampleItemItem exampleResult = results.Hits.First().Document;
+	
+	// if you have the title field indexed with value, this will grab the value out of Lucene without any database work
+	var luceneString = exampleResult.Title.RawValue;
+	
+	// but this value isn't stored in the index. Accessing it will transparently cause the Sitecore.Data.Item to be loaded, and the value retrieved. Nice huh?
+	var promoted = exampleResult.Text.ExpandedLinksValue;
+}
+
+// use IoC to provide data sources to MVC controller renderings
+// 1) map IRenderingContext to SitecoreRenderingContext in your IoC container
+// 2) ...
+public class FooController : Controller
+{
+	private readonly IRenderingContext _renderingContext;
+
+	public FooController(IRenderingContext renderingContext) 
 	{
-		// note: GetSynthesisQueryable by default automatically filters your query by:
-		// - context language
-		// - correct template ID for the synthesis type requested
-		// - latest version of the item only
-		// ...so you don't have to remember to do it :)
-		var results = context.GetSynthesisQueryable<ISampleItemItem>()
-							.FacetOn(x => x.Title.RawValue)
-							.Take(10)
-							.GetResults();
-		
-		ISampleItemItem exampleResult = results.Hits.First().Document;
-		
-		// if you have the title field indexed with value, this will grab the value out of Lucene without any database work
-		var luceneString = exampleResult.Title.RawValue;
-		
-		// but this value isn't stored in the index. Accessing it will transparently cause the Sitecore.Data.Item to be loaded, and the value retrieved. Nice huh?
-		var promoted = exampleResult.Text.ExpandedLinksValue;
+		_renderingContext = renderingContext;
 	}
-	
-	// get crazy with LINQ queries against Synthesis items
-	using (var context = ContentSearchManager.CreateSearchContext(new SitecoreIndexableItem(Sitecore.Context.Item)))
-	{
-		var results = context.GetSynthesisQueryable<ISampleItemItem>()
-							.Where(x => x.Integer.Value == 16 &&
-										x.Double.Value == 16.67m &&
-										x.SingleLineText.RawValue.Contains("line") &&
-										x.RichText.RawValue.StartsWith("richtext") &&
-										x.Boolean.Value == true &&
-										x.DateTime.Value < new DateTime(2013, 5, 1) &&
-										x.Droptree.TargetId == new ID("{9D6120C6-79C1-47D4-9DD8-94E91121A2EC}") &&
-										x.Multilist.TargetIds.Contains(new ID("{016A31AD-0195-4AC6-8218-5977A1C54EBB}")))
-							// you'll want this clause if you disable auto filtering to avoid getting nulls in your results if the template is incorrect
-							.Where(x => x.TemplateIds.Contains(Trample.ItemTemplateId))
-							// you can query on arbitrary index fields, or get their values, using the indexer on Synthesis items
-							.Where(x => x["_latestversion"] == "1")
-							.FacetOn(x => x.Name).FacetOn(x => x.Multilist.TargetIds)
-							.ToList();
-		
-		ISampleItemItem exampleResult = results.Hits.First().Document;
-		
-		// if you have the title field indexed with value, this will grab the value out of Lucene without any database work
-		var luceneString = exampleResult.Title.RawValue;
-		
-		// but this value isn't stored in the index. Accessing it will transparently cause the Sitecore.Data.Item to be loaded, and the value retrieved. Nice huh?
-		var promoted = exampleResult.Text.ExpandedLinksValue;
-	}
 
-	// use IoC to provide data sources to MVC controller renderings
-	// 1) map IRenderingContext to SitecoreRenderingContext in your IoC container
-	// 2) ...
-	public class FooController : Controller
+	public ActionResult Foo() 
 	{
-		private readonly IRenderingContext _renderingContext;
+		var dataSource = _renderingContext.GetRenderingDatasource<IExpectedTypeItem>();
 
-		public FooController(IRenderingContext renderingContext) 
+		if(dataSource == null) 
 		{
-			_renderingContext = renderingContext;
+			// no datasource set, or datasource is wrong template type (or context item, if no datasource set)
+			return Content("Derp.");
 		}
 
-		public ActionResult Foo() 
-		{
-			var dataSource = _renderingContext.GetRenderingDatasource<IExpectedTypeItem>();
+		var model = new FooViewModel(dataSource);
 
-			if(dataSource == null) 
-			{
-				// no datasource set, or datasource is wrong template type (or context item, if no datasource set)
-				return Content("Derp.");
-			}
+		// set other model props here
 
-			var model = new FooViewModel(dataSource);
+		// Note that none of this controller directly used Sitecore APIs and thus does not require FakeDb nor HTTP context
+		// to have unit tests written against it.
 
-			// set other model props here
-
-			// Note that none of this controller directly used Sitecore APIs and thus does not require FakeDb nor HTTP context
-			// to have unit tests written against it.
-
-			return View(model);
-		}
+		return View(model);
 	}
+}
 
-	// use Synthesis.Mvc to provide Synthesis types as models to view renderings automatically
-	@model IMyExpectedTemplateItem
+// use Synthesis.Mvc to provide Synthesis types as models to view renderings automatically
+@model IMyExpectedTemplateItem
 
-	@Html.TextFor(m => m.SomeTextField)
-  
+@Html.TextFor(m => m.SomeTextField)
+```
+
 Ready to try it? Get the package off NuGet and have fun! Installing the NuGet package will show a README in Visual Studio to help you get set up. See the docs in the [wiki](https://github.com/kamsar/Synthesis/wiki) for more information and a deeper dive into how it works.
